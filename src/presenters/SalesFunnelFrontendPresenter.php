@@ -26,19 +26,23 @@ use Crm\SalesFunnelModule\Repository\SalesFunnelsStatsRepository;
 use Crm\SegmentModule\SegmentFactory;
 use Crm\SubscriptionsModule\PaymentItem\SubscriptionTypePaymentItem;
 use Crm\SubscriptionsModule\Repository\ContentAccessRepository;
+use Crm\SubscriptionsModule\Repository\SubscriptionsRepository;
 use Crm\SubscriptionsModule\Repository\SubscriptionTypesRepository;
 use Crm\SubscriptionsModule\Subscription\ActualUserSubscription;
+use Crm\SubscriptionsModule\Events\SubscriptionStartsEvent;
 use Crm\UsersModule\Auth\Authorizator;
 use Crm\UsersModule\Auth\InvalidEmailException;
 use Crm\UsersModule\Auth\UserManager;
 use Crm\UsersModule\Forms\SignInFormFactory;
 use Crm\UsersModule\Repository\AddressesRepository;
+use Crm\UsersModule\Repository\UsersRepository;
 use Nette\Application\BadRequestException;
 use Nette\Application\Responses\TextResponse;
 use Nette\Database\Table\ActiveRow;
 use Nette\Security\AuthenticationException;
 use Nette\Utils\DateTime;
 use Nette\Utils\Json;
+use Nette\Http\Url;
 use Tomaj\Hermes\Emitter;
 
 class SalesFunnelFrontendPresenter extends FrontendPresenter
@@ -222,6 +226,20 @@ class SalesFunnelFrontendPresenter extends FrontendPresenter
         $ua = Request::getUserAgent();
         $this->emitter->emit(new SalesFunnelEvent($salesFunnel, $this->getUser(), SalesFunnelsStatsRepository::TYPE_SHOW, $ua));
 
+        $userId = null;
+        if ($this->getUser()->isLoggedIn()) {
+            $userId = $this->getUser()->getIdentity()->id;
+        }
+        $browserId = (isset($_COOKIE['browser_id']) ? $_COOKIE['browser_id'] : null);
+
+        $this->hermesEmitter->emit(new HermesMessage('sales-funnel', [
+            'type' => 'checkout',
+            'user_id' => $userId,
+            'browser_id' => $browserId,
+            'sales_funnel_id' => $salesFunnel->id,
+            'source' => $this->trackingParams(),
+        ]));
+
         $this->sendResponse(new TextResponse($template));
     }
 
@@ -232,7 +250,13 @@ class SalesFunnelFrontendPresenter extends FrontendPresenter
         /** @var ActiveRow $gatewayRow */
         foreach ($gatewayRows as $gatewayRow) {
             $gateways[$gatewayRow->code] = $gatewayRow->toArray();
+            if ($gatewayRow->code == 'free') {
+                return [
+                    $gatewayRow->code => $gatewayRow->toArray()
+                ];
+            }
         }
+
         return $gateways;
     }
 
@@ -484,94 +508,114 @@ class SalesFunnelFrontendPresenter extends FrontendPresenter
             $this->redirectOrSendJson('limitReached', $funnel->id);
         }
 
-        $addressId = filter_input(INPUT_POST, 'address_id');
-        if ($addressId) {
-            $address = $this->addressesRepository->find($addressId);
-            if ($address->user_id != $user->id) {
-                $address = null;
+        if ($referer) {
+            $refererUrl = new Url($referer);
+            $destination = $refererUrl->getQueryParameter('destination');
+        }
+
+        if ($paymentGateway->code == 'free') {
+            $subscription = $this->createSubscription($subscriptionType, $user);
+
+            if (isset($destination)) {
+                $this->redirect(
+                    ':SalesFunnel:SalesFunnelFrontend:Success',
+                    $funnel,
+                    $destination
+                );
             }
-        }
 
-        // container items
-        $paymentItemContainer = (new PaymentItemContainer())->addItems(SubscriptionTypePaymentItem::fromSubscriptionType($subscriptionType));
-        if ($additionalAmount) {
-            $donationPaymentVat = $this->applicationConfig->get('donation_vat_rate');
-            if ($donationPaymentVat === null) {
-                throw new \Exception("Config 'donation_vat_rate' is not set");
+            $this->flashMessage('Successful subscription');
+            $this->redirect(':Subscriptions:Subscriptions:my');
+        } else {
+            $addressId = filter_input(INPUT_POST, 'address_id');
+            if ($addressId) {
+                $address = $this->addressesRepository->find($addressId);
+                if ($address->user_id != $user->id) {
+                    $address = null;
+                }
             }
-            $paymentItemContainer->addItem(new DonationPaymentItem($this->translator->translate('payments.admin.donation'), $additionalAmount, (int)$donationPaymentVat));
-        }
 
-        // let modules add own items to PaymentItemContainer before payment is created
-        $this->emitter->emit(new PaymentItemContainerReadyEvent(
-            $paymentItemContainer,
-            $this->getHttpRequest()->getPost()
-        ));
-
-        // prepare payment meta
-        $metaData['newsletters_subscribe'] = (bool)filter_input(INPUT_POST, 'newsletters_subscribe');
-
-        foreach ($this->getHttpRequest()->getPost('payment_metadata', []) as $key => $submittedMeta) {
-            if ($submittedMeta !== "") {
-                $metaData[$key] = $submittedMeta;
+            // container items
+            $paymentItemContainer = (new PaymentItemContainer())->addItems(SubscriptionTypePaymentItem::fromSubscriptionType($subscriptionType));
+            if ($additionalAmount) {
+                $donationPaymentVat = $this->applicationConfig->get('donation_vat_rate');
+                if ($donationPaymentVat === null) {
+                    throw new \Exception("Config 'donation_vat_rate' is not set");
+                }
+                $paymentItemContainer->addItem(new DonationPaymentItem($this->translator->translate('payments.admin.donation'), $additionalAmount, (int)$donationPaymentVat));
             }
-        }
 
-        $trackerParams = [];
-        /** @var TrackerDataProviderInterface[] $providers */
-        $providers = $this->dataProviderManager->getProviders(
-            'sales_funnel.dataprovider.tracker',
-            TrackerDataProviderInterface::class
-        );
-        foreach ($providers as $provider) {
-            $trackerParams[] = $provider->provide();
-        }
-        $trackerParams = array_merge([], ...$trackerParams);
+            // let modules add own items to PaymentItemContainer before payment is created
+            $this->emitter->emit(new PaymentItemContainerReadyEvent(
+                $paymentItemContainer,
+                $this->getHttpRequest()->getPost()
+            ));
 
-        $payment = $this->paymentsRepository->add(
-            $subscriptionType,
-            $paymentGateway,
-            $user,
-            $paymentItemContainer,
-            $referer,
-            null,
-            null,
-            null,
-            null,
-            $additionalAmount,
-            $additionalType,
-            null,
-            $address,
-            false,
-            array_merge($metaData, $trackerParams)
-        );
+            // prepare payment meta
+            $metaData['newsletters_subscribe'] = (bool)filter_input(INPUT_POST, 'newsletters_subscribe');
 
-        $this->paymentsRepository->update($payment, ['sales_funnel_id' => $funnel->id]);
-
-        $eventParams = [
-            'type' => 'payment',
-            'user_id' => $user->id,
-            'sales_funnel_id' => $funnel->id,
-            'payment_id' => $payment->id,
-        ];
-        $this->hermesEmitter->emit(
-            new HermesMessage(
-                'sales-funnel',
-                array_merge($eventParams, $trackerParams)
-            )
-        );
-
-        if ($this->hasStoredCard($user, $payment->payment_gateway)) {
-            $this->redirectOrSendJson(':Payments:Recurrent:selectCard', $payment->id);
-        }
-
-        try {
-            $result = $this->paymentProcessor->begin($payment, $this->isAllowedRedirect());
-            if ($result) {
-                $this->sendJson(['status' => 'ok', 'url' => $result]);
+            foreach ($this->getHttpRequest()->getPost('payment_metadata', []) as $key => $submittedMeta) {
+                if ($submittedMeta !== "") {
+                    $metaData[$key] = $submittedMeta;
+                }
             }
-        } catch (CannotProcessPayment $err) {
-            $this->redirectOrSendJson('error');
+
+            $trackerParams = [];
+            /** @var TrackerDataProviderInterface[] $providers */
+            $providers = $this->dataProviderManager->getProviders(
+                'sales_funnel.dataprovider.tracker',
+                TrackerDataProviderInterface::class
+            );
+            foreach ($providers as $provider) {
+                $trackerParams[] = $provider->provide();
+            }
+            $trackerParams = array_merge([], ...$trackerParams);
+
+            $payment = $this->paymentsRepository->add(
+                $subscriptionType,
+                $paymentGateway,
+                $user,
+                $paymentItemContainer,
+                $referer,
+                null,
+                null,
+                null,
+                null,
+                $additionalAmount,
+                $additionalType,
+                null,
+                $address,
+                false,
+                array_merge($metaData, $trackerParams)
+            );
+
+            $this->paymentsRepository->update($payment, ['sales_funnel_id' => $funnel->id]);
+
+            $eventParams = [
+                'type' => 'payment',
+                'user_id' => $user->id,
+                'sales_funnel_id' => $funnel->id,
+                'payment_id' => $payment->id,
+            ];
+            $this->hermesEmitter->emit(
+                new HermesMessage(
+                    'sales-funnel',
+                    array_merge($eventParams, $trackerParams)
+                )
+            );
+
+            if ($this->hasStoredCard($user, $payment->payment_gateway)) {
+                $this->redirectOrSendJson(':Payments:Recurrent:selectCard', $payment->id);
+            }
+
+            try {
+                $result = $this->paymentProcessor->begin($payment, $this->isAllowedRedirect());
+                if ($result) {
+                    $this->sendJson(['status' => 'ok', 'url' => $result]);
+                }
+            } catch (CannotProcessPayment $err) {
+                $this->redirectOrSendJson('error');
+            }
         }
     }
 
@@ -706,5 +750,40 @@ class SalesFunnelFrontendPresenter extends FrontendPresenter
             'status' => 'error',
             'url' => $this->link($destination, $args)
         ]);
+    }
+
+    public function renderSuccess($funnel, $destination = NULL)
+    {
+        if ($destination) {
+            $this->template->destination = $destination;
+        }
+
+        $this->getSession('sales_funnel')->remove();
+    }
+
+    private function createSubscription($subscription_type, $user) {
+        $subscriptionType = SubscriptionsRepository::TYPE_REGULAR;
+
+        $subscription = $this->subscriptionsRepository->add(
+            $subscription_type,
+            false,
+            $user,
+            $subscriptionType,
+            null,
+            null,
+            null,
+            null
+        );
+
+        if ($subscription->end_time <= new DateTime()) {
+            $this->subscriptionsRepository->setExpired($subscription);
+        } elseif ($subscription->start_time <= new DateTime()) {
+            $this->subscriptionsRepository->update($subscription, ['internal_status' => SubscriptionsRepository::INTERNAL_STATUS_ACTIVE]);
+            $this->emitter->emit(new SubscriptionStartsEvent($subscription));
+        } else {
+            $this->subscriptionsRepository->update($subscription, ['internal_status' => SubscriptionsRepository::INTERNAL_STATUS_BEFORE_START]);
+        }
+
+        return $subscription;
     }
 }
