@@ -4,12 +4,15 @@
 
 {block #content}
 
-  <div class="container">
-      <h1>Thank you for your subscription.</h1>
+  <div class="col-md-6 col-md-offset-3">
+    <h1>{_sales_funnel.frontend.success.title}</h1>
 
-      <div class="row">
-          <a href="{$destination}" class="btn btn-primary">Return to post</a>
-      </div>
+    <p class="lead">{_sales_funnel.frontend.success.description}</p>
+
+    <div class="col-md-6 col-md-offset-3">
+      <a href="{$destination}" class="btn btn-primary btn-lg btn-block">{_sales_funnel.frontend.success.return}</a>
+    </div>
   </div>
+
 
 {/block}

@@ -50,6 +50,10 @@ frontend:
 		title: No access
 	sign_in:
 		title: You have to sign in for this action
+	success:
+		title: "Thank you for your subscription"
+		description: "We have sent you an email of instructions to activate your account"
+		return: "Back to article"
 	success_page:
 		title: Thank you!
 		payment_success: Your payment was successful.
