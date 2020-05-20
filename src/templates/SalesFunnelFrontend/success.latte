@@ -1,18 +1,18 @@
-{block title}Success{/block}
+{block title}{_sales_funnel.frontend.success.title}{/block}
 
 {block #headstart}{/block}
 
+{block #list}
+  <ul class="thank-you-list">
+    <li>Ellenőrizd az e-mail fiókodat.
+    <span>A megadott e-mail címre küldtünk egy regisztrációt megerősítő levelet. Ha nem érkezett leveled, kérjük ellenőrizd a SPAM (kéreletlen levelek) fiókot is.</span></li>
+    <li>Nyisd meg a küldött e-mailt.
+    <span>Járj el a levélben megadott instrukciók szerint. </span></li>
+    <li>Erősítsd meg regisztrációdat.
+    <span>Kattints kérlek a megerősítő linkre.</span></li>
+  </ul>
+{/block}
+
 {block #content}
-
-  <div class="col-md-6 col-md-offset-3">
-    <h1>{_sales_funnel.frontend.success.title}</h1>
-
-    <p class="lead">{_sales_funnel.frontend.success.description}</p>
-
-    <div class="col-md-6 col-md-offset-3">
-      <a href="{$destination}" class="btn btn-primary btn-lg btn-block">{_sales_funnel.frontend.success.return}</a>
-    </div>
-  </div>
-
 
 {/block}
