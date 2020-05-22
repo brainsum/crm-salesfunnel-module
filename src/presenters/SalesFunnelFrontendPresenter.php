@@ -665,9 +665,25 @@ class SalesFunnelFrontendPresenter extends FrontendPresenter
     public function renderLimitReached($id = null)
     {
         if ($id) {
-            $funnel = $this->salesFunnelsRepository->find($id);
-            if ($funnel && $funnel->no_access_html) {
-                $this->template->noAccessHtml = $funnel->no_access_html;
+            $salesFunnel = $this->salesFunnelsRepository->find($id);
+            if ($salesFunnel && $salesFunnel->no_access_html) {
+                $body = $salesFunnel->no_access_html;
+
+                $loader = new \Twig\Loader\ArrayLoader([
+                    'funnel_template' => $body,
+                ]);
+                $twig = new \Twig\Environment($loader);
+
+                $headEnd = $this->applicationConfig->get('header_block') . "\n\n" . $salesFunnel->head;
+                $params = [
+                    'headEnd' => $headEnd,
+                    'funnel' => $salesFunnel,
+                    'meta' => $this->salesFunnelsMetaRepository->all($salesFunnel),
+                    'site_url' => $this->applicationConfig->get('site_url')
+                ];
+
+                $template = $twig->render('funnel_template', $params);
+                $this->sendResponse(new TextResponse($template));
             }
         }
     }
