@@ -517,16 +517,10 @@ class SalesFunnelFrontendPresenter extends FrontendPresenter
         if ($paymentGateway->code == 'free') {
             $subscription = $this->createSubscription($subscriptionType, $user);
 
-            if (isset($destination)) {
-                $this->redirect(
-                    ':SalesFunnel:SalesFunnelFrontend:Success',
-                    $funnel,
-                    $destination
-                );
-            }
-
-            $this->flashMessage('Successful subscription');
-            $this->redirect(':Subscriptions:Subscriptions:my');
+            $this->redirect(
+                ':SalesFunnel:SalesFunnelFrontend:Success',
+                $funnel
+            );
         } else {
             $addressId = filter_input(INPUT_POST, 'address_id');
             if ($addressId) {
