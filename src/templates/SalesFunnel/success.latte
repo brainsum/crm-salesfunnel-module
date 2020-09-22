@@ -35,16 +35,8 @@
                 {control snippet 'success-attention'}
             </div>
 
-            <div id="success-forms">
-                {control simpleWidget 'frontend.payment.success.forms', $payment}
-            </div>
+            {control simpleWidget 'frontend.payment.success.forms', $payment}
 
-            <hr class="hide-if-no-forms" />
-
-            <div id="finish">
-                {control simpleWidget 'frontend.payment.success.finish_registration', $payment}
-
-            </div>
         </div>
     </div>
 </div>
